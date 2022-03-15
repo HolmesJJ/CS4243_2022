@@ -419,8 +419,8 @@ test_label = torch.load(data_path + 'mnist/test_label.pt')
 ```python
 class three_layer_net(nn.Module):
 
-    def __init__(self, input_size, hidden_size1, hidden_size2,  output_size):
-        super(three_layer_net , self).__init__()
+    def __init__(self, input_size, hidden_size1, hidden_size2, output_size):
+        super(three_layer_net, self).__init__()
         
         # 三层全连接网络MLP
         self.layer1 = nn.Linear(input_size, hidden_size1, bias=False)
