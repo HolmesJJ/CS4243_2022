@@ -385,7 +385,7 @@ Loss = Loss / 2 # 需要除以2
 print('自行计算的loss', Loss)
 ```
 
-## Final Code
+## Multilayer Perceptron (MLP)
 ```python
 import torch
 import torch.nn as nn
@@ -464,7 +464,7 @@ net = net.to(device)
 
 ### Choose the criterion and batch size
 ```python
-# cross-entropy Loss
+# cross-entropy loss
 criterion = nn.CrossEntropyLoss()
 # criterion = nn.NLLLoss()
 # batch size = 200
@@ -539,6 +539,10 @@ for epoch in range(200):
         minibatch_data = train_data[indices]
         minibatch_label = train_label[indices]
 
+        # send to the GPU
+        minibatch_data = minibatch_data.to(device)
+        minibatch_label = minibatch_label.to(device)
+
         # reshape the minibatch, batch size = 200, 784 = 28 x 28
         # 200 x 784
         inputs = minibatch_data.view(bs, 784)
@@ -599,14 +603,405 @@ im = test_data[idx]
 utils.show(im)
 
 # feed it to the net and display the confidence scores
+# send to device, and view as a batch of 1 
+im = im.to(device)
+
 # im.view(1, 784)而不是im.view(784)是因为net是根据有batch size存在而设计的
 # 例如batch size = 200，即im.view(200, 784)，则input是[[data_1], [data_2], ..., [data_200]]
 # 而im.view(784)的input是[data_1]，少了一个维度
 # 1代表了batch size = 1，就是只有一张图
-scores = net(im.view(1, 784)) # one 1 x 784 image, 784 = 28 x 28
+im = im.view(1, 784) # one 1 x 784 image, 784 = 28 x 28
+scores = net(im) 
+
 # dim=1是因为这里的输出是
 # [[-7.2764, 8.4730, 2.6842, 1.6302, -3.8437, -1.9697, -0.5854, -0.0792, 2.0861, -0.5462]]
 # 需要求里面的维度的softmax
 probs = torch.softmax(scores, dim=1)
-utils.show_prob_mnist(probs)
+utils.show_prob_cifar(probs.cpu())
+```
+
+## Convolutional Layer
+```python
+import torch
+import torch.nn as nn
+
+# Inputs: 2 channels
+# Output: 5 activation maps
+# 输入和输出都只是定义了深度
+# Filters: 3x3
+# padding: 1x1
+# 卷积层并没有固定输入和输出图片的大小，输入图片可以是任意大小，输出图片的大小是有输入图片决定的
+mod = nn.Conv2d(2, 5, kernel_size=3, padding=1)
+```
+
+## Pooling Layer
+```python
+import torch
+import torch.nn as nn
+
+# Inputs: activation maps of size n x n
+# Output: activation maps of size n/p x n/p
+# 输入和输出都只是定义了深度
+# p: pooling size: 2x2
+mod = nn.MaxPool2d(2, 2)
+```
+
+## VGG Architecture
+```python
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from random import randint
+import time
+import utils
+```
+
+### GPU or CPU
+```python
+# device = torch.device("cuda")
+device = torch.device("cpu")
+print(device)
+```
+
+### Download the data
+```python
+from utils import check_mnist_dataset_exists
+data_path = check_mnist_dataset_exists()
+
+# download cifar dataset
+# 50,000 pictures as well as their label, each picture is 32 by 32 pixels
+train_data = torch.load(data_path + 'cifar/train_data.pt')
+train_label = torch.load(data_path + 'cifar/train_label.pt')
+test_data = torch.load(data_path + 'cifar/test_data.pt')
+test_label = torch.load(data_path + 'cifar/test_label.pt')
+```
+
+### Standardisation
+```python
+mean = train_data.mean() # 求tensor中所有元素的平均值
+std = train_data.std() # 求tensor中所有元素的标准差
+```
+
+### Make a LeNet5 convnet class
+```python
+class LeNet5_convnet(nn.Module):
+
+    def __init__(self):
+
+        super(LeNet5_convnet, self).__init__()
+        # CL1: 28 x 28 --> 50 x 28 x 28
+        # 输出尺寸 = (输入尺寸n + 2 * 填充p - 过滤器尺寸f) / 步长s + 1
+        # (28 + 2 * 1 - 3) / 1 + 1 = 28
+        self.conv1 = nn.Conv2d(1, 50, kernel_size=3, padding=1)
+        # MP1: 50 x 28 x 28 --> 50 x 14 x 14
+        # 输入尺寸 = (输入尺寸n - 过滤器尺寸f) / 步长s + 1
+        # (28 - 2) / 2 + 1 = 14
+        self.pool1  = nn.MaxPool2d(2, 2)
+
+        # CL2: 50 x 14 x 14 --> 100 x 14 x 14
+        # 输出尺寸 = (输入尺寸n + 2 * 填充p - 过滤器尺寸f) / 步长s + 1
+        # (14 + 2 * 1 - 3) / 1 + 1 = 14
+        self.conv2 = nn.Conv2d(50, 100, kernel_size=3, padding=1)
+        # MP2: 100 x 14 x 14 --> 100 x 7 x 7
+        # 输入尺寸 = (输入尺寸n - 过滤器尺寸f) / 步长s + 1
+        # (14 - 2) / 2 + 1 = 7
+        self.pool2 = nn.MaxPool2d(2, 2)
+        
+        # LL1: 100 x 7 x 7 = 4900 --> 100 
+        self.linear1 = nn.Linear(4900, 100)
+        # LL2: 100 --> 10
+        self.linear2 = nn.Linear(100, 10)
+
+    def forward(self, x):
+
+        # CL1: 28 x 28 --> 50 x 28 x 28 
+        x = self.conv1(x)
+        x = torch.relu(x)
+
+        # MP1: 50 x 28 x 28 --> 50 x 14 x 14
+        # Pooling没有ReLU
+        x = self.pool1(x)
+        
+        # CL2: 50 x 14 x 14  --> 100 x 14 x 14
+        x = self.conv2(x)
+        x = torch.relu(x)
+        
+        # MP2: 100 x 14 x 14 --> 100 x 7 x 7
+        # Pooling没有ReLU
+        x = self.pool1(x)
+
+        # LL1: 100 x 7 x 7 = 4900  --> 100 
+        # 这里用-1的原因是因为下面的设置了batch size = 128，这里自动换算维度，实际上-1可以用128代替
+        x = x.view(-1, 4900)
+        x = self.linear1(x)
+        x = torch.relu(x)
+
+        # LL2: 4900 --> 10 
+        x = self.linear2(x)
+
+        return x
+```
+
+### Make a VGG convnet class
+```python
+class VGG_convnet(nn.Module):
+
+    def __init__(self):
+
+        super(VGG_convnet, self).__init__()
+
+        # block 1: 3 x 32 x 32 --> 64 x 16 x 16
+        # 输出尺寸 = (输入尺寸n + 2 * 填充p - 过滤器尺寸f) / 步长s + 1
+        # (32 + 2 * 1 - 3) / 1 + 1 = 32
+        self.conv1a = nn.Conv2d(3, 64, kernel_size=3, padding=1)
+        self.conv1b = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        # 输入尺寸 = (输入尺寸n - 过滤器尺寸f) / 步长s + 1
+        # (32 - 2) / 2 + 1 = 16
+        self.pool1 = nn.MaxPool2d(2, 2)
+
+        # block 2: 64 x 16 x 16 --> 128 x 8 x 8
+        # 输出尺寸 = (输入尺寸n + 2 * 填充p - 过滤器尺寸f) / 步长s + 1
+        # (16 + 2 * 1 - 3) / 1 + 1 = 8
+        self.conv2a = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        self.conv2b = nn.Conv2d(128, 128, kernel_size=3, padding=1)
+        # 输入尺寸 = (输入尺寸n - 过滤器尺寸f) / 步长s + 1
+        # (16 - 2) / 2 + 1 = 8
+        self.pool2 = nn.MaxPool2d(2, 2)
+
+        # block 3: 128 x 8 x 8 --> 256 x 4 x 4
+        # 输出尺寸 = (输入尺寸n + 2 * 填充p - 过滤器尺寸f) / 步长s + 1
+        # (8 + 2 * 1 - 3) / 1 + 1 = 8
+        self.conv3a = nn.Conv2d(128, 256, kernel_size=3, padding=1)
+        self.conv3b = nn.Conv2d(256, 256, kernel_size=3, padding=1)
+        # 输入尺寸 = (输入尺寸n - 过滤器尺寸f) / 步长s + 1
+        # (8 - 2) / 2 + 1 = 4
+        self.pool3 = nn.MaxPool2d(2, 2)
+        
+        #block 4: 256 x 4 x 4 --> 512 x 2 x 2
+        # 输出尺寸 = (输入尺寸n + 2 * 填充p - 过滤器尺寸f) / 步长s + 1
+        # (4 + 2 * 1 - 3) / 1 + 1 = 4
+        self.conv4a = nn.Conv2d(256, 512, kernel_size=3, padding=1)
+        # 输入尺寸 = (输入尺寸n - 过滤器尺寸f) / 步长s + 1
+        # (4 - 2) / 2 + 1 = 2
+        self.pool4  = nn.MaxPool2d(2, 2)
+
+        # linear layers: 512 x 2 x 2 --> 2048 --> 4096 --> 4096 --> 10
+        self.linear1 = nn.Linear(2048, 4096)
+        self.linear2 = nn.Linear(4096, 4096)
+        self.linear3 = nn.Linear(4096, 10)
+
+    def forward(self, x):
+
+        # block 1: 3 x 32 x 32 --> 64 x 16 x 16
+        x = self.conv1a(x)
+        x = torch.relu(x)
+        x = self.conv1b(x)
+        x = torch.relu(x)
+        # Pooling没有ReLU
+        x = self.pool1(x)
+
+        # block 2: 64 x 16 x 16 --> 128 x 8 x 8
+        x = self.conv2a(x)
+        x = torch.relu(x)
+        x = self.conv2b(x)
+        x = torch.relu(x)
+        # Pooling没有ReLU
+        x = self.pool2(x)
+
+        # block 3: 128 x 8 x 8 --> 256 x 4 x 4
+        x = self.conv3a(x)
+        x = torch.relu(x)
+        x = self.conv3b(x)
+        x = torch.relu(x)
+        # Pooling没有ReLU
+        x = self.pool3(x)
+
+        #block 4: 256 x 4 x 4 --> 512 x 2 x 2
+        x = self.conv4a(x)
+        x = torch.relu(x)
+        # Pooling没有ReLU
+        x = self.pool4(x)
+
+        # linear layers: 512 x 2 x 2 --> 2048 --> 4096 --> 4096 --> 10
+        # 这里用-1的原因是因为下面的设置了batch size = 128，这里自动换算维度，实际上-1可以用128代替
+        x = x.view(-1, 2048)
+        x = self.linear1(x)
+        x = torch.relu(x)
+        x = self.linear2(x)
+        x = torch.relu(x)
+        x = self.linear3(x)
+        
+        return x
+```
+
+### Build the net
+```python
+net = VGG_convnet()
+print(net)
+utils.display_num_param(net)
+```
+
+### Send the weights of the networks to the GPU
+```python
+net = net.to(device)
+mean = mean.to(device)
+std = std.to(device)
+```
+
+### Choose the criterion and batch size
+```python
+# cross-entropyloss
+criterion = nn.CrossEntropyLoss()
+my_lr = 0.25
+bs = 128
+```
+
+### Evaluate on test set
+```python
+def eval_on_test_set():
+
+    running_error = 0
+    num_batches = 0
+
+    # test size = 10000
+    for i in range(0, 10000, bs):
+
+        # extract the minibatch
+        minibatch_data = test_data[i: i + bs]
+        minibatch_label = test_label[i: i + bs]
+
+        # send to the GPU
+        minibatch_data = minibatch_data.to(device)
+        minibatch_label = minibatch_label.to(device)
+
+        # normalize the minibatch (this is the only difference compared to before!)
+        inputs = (minibatch_data - mean) / std
+
+        # feed it to the network
+        scores = net(inputs) 
+
+        # compute the error made on this batch
+        error = utils.get_error(scores, minibatch_label)
+
+        # add it to the running error
+        running_error += error.item()
+
+        num_batches += 1
+
+    total_error = running_error / num_batches
+    print('test error  = ', total_error * 100, ' percent')
+```
+
+### Training loop
+```python
+start = time.time()
+
+for epoch in range(1, 20):
+    
+    # divide the learning rate by 2 at epoch 10, 14 and 18
+    if epoch == 10 or epoch == 14 or epoch==18:
+        my_lr = my_lr / 2
+    
+    # create a new optimizer at the beginning of each epoch: give the current learning rate.
+    optimizer = torch.optim.SGD(net.parameters() , lr=lr)
+        
+    running_loss = 0
+    running_error = 0
+    num_batches = 0
+    
+    # 先随机排序
+    # train size = 50000
+    shuffled_indices = torch.randperm(50000)
+
+    # train size = 50000
+    for count in range(0, 50000, bs):
+        
+        # forward and backward pass
+        # set dL/dU, dL/dV, dL/dW to be filled with zeros
+        optimizer.zero_grad()
+        
+        # 随机抽取200条数据, batch size = 200
+        indices = shuffled_indices[count: count + bs]
+        minibatch_data = train_data[indices]
+        minibatch_label = train_label[indices]
+
+        # send to the GPU
+        minibatch_data = minibatch_data.to(device)
+        minibatch_label = minibatch_label.to(device)
+
+        # normalize the minibatch (this is the only difference compared to before!)
+        inputs = (minibatch_data - mean) / std
+
+        # tell Pytorch to start tracking all operations that will be done on "inputs"
+        inputs.requires_grad_()
+
+        # forward the minibatch through the net
+        scores = net(inputs) 
+        # log_scores = torch.log(scores)
+
+        # compute the average of the losses of the data points in the minibatch
+        # 一个batch的平均损失
+        loss = criterion(scores, minibatch_label) 
+        # loss = criterion(log_scores, minibatch_label)
+        
+        # backward pass to compute dL/dU, dL/dV and dL/dW
+        loss.backward()
+
+        # do one step of stochastic gradient descent: U=U-lr(dL/dU), V=V-lr(dL/dU), ...
+        optimizer.step()
+        
+        # compute some stats
+        # 获得当前的loss
+        running_loss += loss.detach().item()
+               
+        error = utils.get_error(scores.detach(), minibatch_label)
+        running_error += error.item()
+        
+        num_batches += 1
+    
+    # compute stats for the full training set
+    # once the epoch is finished we divide the "running quantities" by the number of batches
+    # 总Loss = 每个Batch的Loss累加 / Batch数量累加 = 所有Batch的Loss / Batch数
+    # 若Batch Size = 1，则Batch数 = 数据集大小
+    # 若Batch Size = 数据集大小，则Batch数 = 1
+    total_loss = running_loss / num_batches
+    # 总Error = 每个Batch的Error累加 / Error数量累加 = 所有Batch的Error / Batch数
+    # 若Batch Size = ，则Batch数 = 数据集大小
+    # 若Batch Size = 数据集大小，则Batch数 = 1
+    total_error = running_error / num_batches
+    # 训练一个batch的时间
+    elapsed_time = time.time() - start
+    
+    # every 10 epoch we display the stats and compute the error rate on the test set  
+    if epoch % 10 == 0 : 
+        print(' ')
+        print('epoch = ', epoch, ' time = ', elapsed_time, ' loss = ', total_loss, ' error = ', total_error * 100, ' percent lr = ', lr)
+        eval_on_test_set()
+```
+
+```python
+# choose a picture at random
+idx = randint(0, 10000-1)
+im = test_data[idx]
+
+# diplay the picture
+utils.show(im)
+
+# feed it to the net and display the confidence scores
+# send to device, rescale, and view as a batch of 1 
+im = im.to(device)
+im = (im - mean) / std
+
+# im.view(1, 3, 32, 32)而不是im.view(3, 32, 32)是因为net是根据有batch size存在而设计的
+# 例如batch size = 128，即im.view(128, 784)，则input是[[data_1], [data_2], ..., [data_128]]
+# 而im.view(3, 32, 32)的input是[data_1]，少了一个维度
+# 1代表了batch size = 1，就是只有一张图
+im = im.view(1, 3, 32, 32) # one 1 x (3 x 32 x 32) image, 3072 = 3 x 32 x 32
+scores = net(im) 
+
+# dim=1是因为这里的输出是
+# [[-7.2764, 8.4730, 2.6842, 1.6302, -3.8437, -1.9697, -0.5854, -0.0792, 2.0861, -0.5462]]
+# 需要求里面的维度的softmax
+probs = torch.softmax(scores, dim=1)
+utils.show_prob_cifar(probs.cpu())
 ```

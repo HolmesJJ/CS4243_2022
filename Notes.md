@@ -48,3 +48,4 @@
 
 ### Lecture 12
 * [图像处理之双线性插值法](https://blog.csdn.net/qq_37577735/article/details/80041586)
+* 反卷积: 输出尺寸 = (输入尺寸 - 1) * 步长s - 2 * 填充p + 过滤器尺寸f
